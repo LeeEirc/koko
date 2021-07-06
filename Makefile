@@ -19,7 +19,7 @@ KOKOLDFLAGS+=-X 'main.Goversion=$(GOVERSION)'
 KOKOLDFLAGS+=-X 'github.com/jumpserver/koko/pkg/koko.Version=$(VERSION)'
 KOKOLDFLAGS+=-X 'github.com/jumpserver/koko/pkg/config.CipherKey=$(CipherKey)'
 
-KUBECTLFLAGS=-X 'github.com/jumpserver/koko/pkg/config.CipherKey=$(CipherKey)'
+KUBECTLFLAGS="-X 'github.com/jumpserver/koko/pkg/config.CipherKey=$(CipherKey)'"
 
 KOKOBUILD=CGO_ENABLED=0 go build -trimpath -ldflags "$(KOKOLDFLAGS)"
 KUBECTLBUILD=CGO_ENABLED=0 go build -trimpath -ldflags $(KUBECTLFLAGS)
