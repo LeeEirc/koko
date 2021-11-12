@@ -13,7 +13,7 @@ require (
 	github.com/denisenkom/go-mssqldb v0.11.0
 	github.com/elastic/go-elasticsearch/v6 v6.8.5
 	github.com/gin-gonic/gin v1.7.4
-	github.com/gliderlabs/ssh v0.2.3-0.20190711180243-866d0ddf7991
+	github.com/gliderlabs/ssh v0.3.3
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/gorilla/websocket v1.4.2
 	github.com/huaweicloud/huaweicloud-sdk-go-obs v3.21.1+incompatible
@@ -69,7 +69,8 @@ require (
 	github.com/spf13/pflag v1.0.3 // indirect
 	github.com/subosito/gotenv v1.2.0 // indirect
 	github.com/ugorji/go/codec v1.2.6 // indirect
-	golang.org/x/sys v0.0.0-20211110154304-99a53858aa08 // indirect
+	golang.org/x/sys v0.0.0-20211111213525-f221eed1c01e // indirect
+	golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1 // indirect
 	golang.org/x/time v0.0.0-20190308202827-9d24e82272b4 // indirect
 	golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543 // indirect
 	google.golang.org/protobuf v1.27.1 // indirect
@@ -79,6 +80,6 @@ require (
 )
 
 replace (
-	github.com/gliderlabs/ssh v0.2.3-0.20190711180243-866d0ddf7991 => github.com/LeeEirc/ssh v0.1.2-0.20201111074515-e8272f1a6534
-	golang.org/x/crypto v0.0.0-20211108221036-ceb1ce70b4fa => github.com/LeeEirc/crypto v0.0.0-20201111063343-abd7a31f9aa8
+	github.com/gliderlabs/ssh v0.3.3 => github.com/LeeEirc/ssh v0.1.2-0.20211112094038-5ebcf34caaf1
+	golang.org/x/crypto v0.0.0-20211108221036-ceb1ce70b4fa => github.com/LeeEirc/crypto v0.0.0-20211112090926-652515632c44
 )
