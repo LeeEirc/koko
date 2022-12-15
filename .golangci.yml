@@ -1,0 +1,7 @@
+run:
+  skip-dirs:
+    - cmd/demo
+    - cmd/i18ntool
+
+  skip-files:
+    - pkg/utils/terminal.go
