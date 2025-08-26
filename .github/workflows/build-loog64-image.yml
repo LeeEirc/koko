@@ -38,6 +38,6 @@ jobs:
           platforms: linux/loong64
           push: true
           file: Dockerfile-loong64
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/koko:${{inputs.VERSION}-loong64
+          tags: ghcr.io/${{ github.repository_owner }}/koko:${{ inputs.VERSION }}-loong64
+
 
