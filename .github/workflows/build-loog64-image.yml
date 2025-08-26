@@ -32,12 +32,20 @@ jobs:
         id: make_build
         run: |
           make koko-ui
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw, value=${{ inputs.VERSION }}-loong64
       - name: Build and push multi-arch image
         uses: docker/build-push-action@v6
         with:
           platforms: linux/loong64
           push: true
           file: Dockerfile-loong64
-          tags: ghcr.io/${{ github.repository }}:${{ inputs.VERSION }}-loong64
+
+          tags: ${{ steps.meta.outputs.tags }}
 
 
