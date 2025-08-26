@@ -1,4 +1,4 @@
-name: Build and Push Base Image
+name: build loong64
 
 on:
   workflow_dispatch:
