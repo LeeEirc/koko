@@ -32,7 +32,8 @@ ENV GO111MODULE=on
 
 COPY . .
 
-RUN make build -s
+RUN make build -s \
+    && mv /opt/koko/build/koko /opt/koko/koko
 
 RUN mkdir /opt/koko/release \
     && mv /opt/koko/locale /opt/koko/release \
