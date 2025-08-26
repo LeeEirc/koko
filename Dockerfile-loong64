@@ -1,0 +1,83 @@
+FROM ghcr.io/loong64/redis:7.2-trixie AS redis-stage
+ARG GO_VERSION=1.24.0
+FROM ghcr.io/loong64/golang:${GO_VERSION}-trixie as stage-build
+
+COPY --from=redis-stage /usr/local/bin/redis-cli /usr/local/bin/redis-cli
+ENV GOPATH=/go
+ENV PATH=/go/bin:/usr/local/go/bin:$PATH
+ARG TARGETARCH
+
+WORKDIR /opt
+
+ARG HELM_VERSION=v3.16.1
+ARG KUBECTL_VERSION=v1.31.3
+ARG CHECK_VERSION=v1.0.4
+ARG USQL_VERSION=v0.0.7
+
+RUN set -ex \
+    && mkdir -p /opt/koko/bin \
+    && wget https://github.com/jumpserver-dev/healthcheck/releases/download/${CHECK_VERSION}/check-${CHECK_VERSION}-linux-${TARGETARCH}.tar.gz \
+    && tar -xf check-${CHECK_VERSION}-linux-${TARGETARCH}.tar.gz -C /opt/koko/bin/ check \
+    && wget https://github.com/jumpserver-dev/usql/releases/download/${USQL_VERSION}/usql-${USQL_VERSION}-linux-${TARGETARCH}.tar.gz \
+    && tar -xf usql-${USQL_VERSION}-linux-${TARGETARCH}.tar.gz -C /opt/koko/bin/ \
+    && wget -O /opt/koko/.kubectl_aliases https://github.com/ahmetb/kubectl-aliases/raw/master/.kubectl_aliases \
+    && chmod 755 /opt/koko/bin/* \
+    && chown root:root /opt/koko/bin/* \
+    && rm -f *.tar.gz
+
+
+WORKDIR /opt/koko/
+
+ENV CGO_ENABLED=0
+ENV GO111MODULE=on
+
+COPY . .
+
+RUN make build -s
+
+RUN mkdir /opt/koko/release \
+    && mv /opt/koko/locale /opt/koko/release \
+    && mv /opt/koko/config_example.yml /opt/koko/release \
+    && mv /opt/koko/entrypoint.sh /opt/koko/release \
+    && mv /opt/koko/utils/init-kubectl.sh /opt/koko/release \
+    && chmod 755 /opt/koko/release/entrypoint.sh /opt/koko/release/init-kubectl.sh
+
+
+FROM ghcr.io/loong64/debian:trixie
+ARG TARGETARCH
+ENV LANG=en_US.UTF-8
+
+ARG DEPENDENCIES="                    \
+        bash-completion               \
+        jq                            \
+        less                          \
+        ca-certificates"
+
+RUN set -ex \
+    && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ${DEPENDENCIES} \
+    && apt-get clean all \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/koko
+
+COPY --from=stage-build /usr/local/bin/redis-cli /usr/local/bin/redis-cli
+COPY --from=stage-build /opt/koko/.kubectl_aliases /opt/kubectl-aliases/.kubectl_aliases
+COPY --from=stage-build /opt/koko/bin /usr/local/bin
+COPY --from=stage-build /opt/koko/lib /usr/local/lib
+COPY --from=stage-build /opt/koko/release .
+COPY --from=stage-build /opt/koko/koko .
+
+ARG VERSION
+ENV VERSION=${VERSION}
+
+VOLUME /opt/koko/data
+
+ENTRYPOINT ["./entrypoint.sh"]
+
+EXPOSE 2222
+
+STOPSIGNAL SIGQUIT
+
+CMD [ "./koko" ]
