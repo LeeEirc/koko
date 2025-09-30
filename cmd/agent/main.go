@@ -13,8 +13,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gliderlabs/ssh"
+	"github.com/spf13/viper"
 	gossh "golang.org/x/crypto/ssh"
 )
+
+var sshClient *gossh.Client
 
 // 活动窗格类型
 type activePane int
@@ -326,6 +329,15 @@ func generateAgentResponse(input string) string {
 	}
 }
 
+type EnvConfig struct {
+	Username string `mapstructure:"SSH_USERNAME"`
+	Password string `mapstructure:"SSH_PASSWORD"`
+	Host     string `mapstructure:"SSH_HOST"`
+	Port     string `mapstructure:"SSH_PORT"`
+	ApiURL   string `mapstructure:"OPENAI_API"`
+	APIKey   string `mapstructure:"API_KEY"`
+}
+
 // 格式化 Agent 对话历史
 func formatAgentHistory(history []message) string {
 	var builder strings.Builder
@@ -343,11 +355,22 @@ func formatAgentHistory(history []message) string {
 	return builder.String()
 }
 
+var envConfig EnvConfig
+
 func SessionHandler(session ssh.Session) {
 	ptyReq, winCh, isPty := session.Pty()
 	if !isPty {
 		fmt.Fprintln(session, "Error: No PTY requested")
 		return
+	}
+	if sshClient == nil {
+		viper.AutomaticEnv()
+		envConfig.APIKey = viper.GetString("AI_GATEWAY_API_KEY")
+		envConfig.Username = viper.GetString("SSH_USERNAME")
+		envConfig.Password = viper.GetString("SSH_PASSWORD")
+		envConfig.Host = viper.GetString("SSH_HOST")
+		envConfig.Port = viper.GetString("SSH_PORT")
+		envConfig.ApiURL = viper.GetString("OPENAI_API")
 	}
 
 	username := session.User()
@@ -378,6 +401,7 @@ func SessionHandler(session ssh.Session) {
 }
 
 func main() {
+
 	buf, err := os.ReadFile("old_rsa")
 	if err != nil {
 		slog.Default().Error("Error reading old rsa file", "error", err)
