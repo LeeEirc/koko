@@ -1,0 +1,49 @@
+name: build loong64
+
+on:
+  workflow_dispatch:
+    inputs:
+      BRANCH:
+        description: 'branch'
+        type: string
+        default: 'dev'
+      VERSION:
+        description: 'version'
+        type: string
+        default: 'dev'
+      platforms:
+        description: 'platforms'
+        type: string
+        default: 'linux/amd64,linux/arm64'
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.BRANCH }}
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Environment
+        run: |
+          echo "image_name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/koko" >> $GITHUB_ENV
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ inputs.platforms }}
+          push: true
+          file: Dockerfile
+          tags: ${{ env.image_name }}:${{ inputs.VERSION }}
+
+
