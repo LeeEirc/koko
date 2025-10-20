@@ -1,4 +1,4 @@
-name: build loong64
+name: build image and push to ghcr.io
 
 on:
   workflow_dispatch:
