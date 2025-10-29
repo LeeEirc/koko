@@ -167,9 +167,17 @@ func (s *TerminalParser) Feed(p []byte) {
 
 	s.feed(p)
 
-	if s.state == OutputState {
+	if s.state == OutputState && s.cmd != "" {
 		if s.srvOutputBuf.Len() < maxBufSize {
 			s.srvOutputBuf.Write(p)
+		} else {
+			// 持续输出的过程，同时达到
+			outputBuf := s.TrySrvOutput()
+			if s.EmitCommands != nil {
+				s.EmitCommands(s.cmd, outputBuf)
+			}
+			s.cmd = ""
+			return
 		}
 		ps1 := s.Ps1sStr
 		half := len(ps1) / 2
@@ -462,7 +470,7 @@ var passwordPromptRegexps = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\[sudo]\s*password\s*for\s+.*:`), // [sudo] password for user:
 	regexp.MustCompile(`(?i)enter\s+passphrase\s+for\s+.*:`), // SSH/GPG 私钥 passphrase
 	regexp.MustCompile(`(?i)passphrase\s+for\s+key\s+.*:`),   // git/ssh key 提示
-	regexp.MustCompile(`(?i)请输入密码[:：]?$`),                    // 中文
+	regexp.MustCompile(`(?i)请输入密码[:：]?$`),               // 中文
 	regexp.MustCompile(`(?i)mot de passe[:：]?$`),             // 法语
 	regexp.MustCompile(`(?i)contraseña[:：]?$`),               // 西班牙语
 	regexp.MustCompile(`(?i)senha[:：]?$`),                    // 葡萄牙语
