@@ -234,12 +234,13 @@ func (s *TerminalParser) TrySrvOutput() string {
 }
 
 func (s *TerminalParser) TryOutput() string {
+	s.cmd = ""
 	return s.TrySrvOutput()
 }
 
 func (s *TerminalParser) ResizeRows() {
 	rowsLen := len(s.Screen.Rows)
-	if rowsLen > 1000 {
+	if rowsLen > 2000 {
 		oldRows := s.Screen.Rows
 		oldY := s.Screen.Cursor.Y
 		start := rowsLen - 1000
