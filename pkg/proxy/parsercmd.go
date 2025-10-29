@@ -12,6 +12,7 @@ import (
 	"unicode"
 
 	"github.com/LeeEirc/terminalparser"
+	"github.com/jumpserver/koko/pkg/logger"
 )
 
 var terminalDebug = false
@@ -241,15 +242,28 @@ func (s *TerminalParser) TryOutput() string {
 func (s *TerminalParser) ResizeRows() {
 	rowsLen := len(s.Screen.Rows)
 	if rowsLen > 2000 {
+		newRows := make([]*terminalparser.Row, 1000, 2000)
 		oldRows := s.Screen.Rows
 		oldY := s.Screen.Cursor.Y
-		start := rowsLen - 1000
+		keep := 1000
+		start := rowsLen - keep
+		if start < 0 {
+			start = 0
+		}
 		latestRows := oldRows[start:]
-		copy(s.Screen.Rows, latestRows)
-		s.Screen.Rows = latestRows
+		copy(newRows, latestRows)
+		s.Screen.Rows = newRows
 		if oldY >= len(latestRows) {
 			s.Screen.Cursor.Y = len(latestRows)
 		}
+		// for gc
+		for i := 0; i < start; i++ {
+			oldRows[i] = nil
+		}
+		// for gc
+		oldRows = nil
+		latestRows = nil
+		logger.Debugf("Resize Y: %d, row Len: %d", s.Screen.Cursor.Y, len(s.Screen.Rows))
 	}
 }
 
