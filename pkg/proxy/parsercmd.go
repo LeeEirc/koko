@@ -242,12 +242,12 @@ func (s *TerminalParser) ResizeRows() {
 	if rowsLen > 1000 {
 		oldRows := s.Screen.Rows
 		oldY := s.Screen.Cursor.Y
-		rows := make([]*terminalparser.Row, 0, 3000)
 		start := rowsLen - 1000
-		rows = append(rows, oldRows[start:]...)
-		s.Screen.Rows = rows
-		if oldY >= len(rows) {
-			s.Screen.Cursor.Y = len(rows)
+		latestRows := oldRows[start:]
+		copy(s.Screen.Rows, latestRows)
+		s.Screen.Rows = latestRows
+		if oldY >= len(latestRows) {
+			s.Screen.Cursor.Y = len(latestRows)
 		}
 	}
 }
@@ -470,10 +470,10 @@ var passwordPromptRegexps = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\[sudo]\s*password\s*for\s+.*:`), // [sudo] password for user:
 	regexp.MustCompile(`(?i)enter\s+passphrase\s+for\s+.*:`), // SSH/GPG 私钥 passphrase
 	regexp.MustCompile(`(?i)passphrase\s+for\s+key\s+.*:`),   // git/ssh key 提示
-	regexp.MustCompile(`(?i)请输入密码[:：]?$`),               // 中文
-	regexp.MustCompile(`(?i)mot de passe[:：]?$`),             // 法语
-	regexp.MustCompile(`(?i)contraseña[:：]?$`),               // 西班牙语
-	regexp.MustCompile(`(?i)senha[:：]?$`),                    // 葡萄牙语
+	regexp.MustCompile(`(?i)请输入密码[:：]?$`),
+	regexp.MustCompile(`(?i)mot de passe[:：]?$`),
+	regexp.MustCompile(`(?i)contraseña[:：]?$`),
+	regexp.MustCompile(`(?i)senha[:：]?$`),
 }
 
 func IsPasswordPrompt(ps1 string) bool {
