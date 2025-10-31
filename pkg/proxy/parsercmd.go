@@ -241,7 +241,7 @@ func (s *TerminalParser) TryOutput() string {
 
 func (s *TerminalParser) ResizeRows() {
 	rowsLen := len(s.Screen.Rows)
-	if rowsLen > 2000 {
+	if rowsLen >= 2000 {
 		newRows := make([]*terminalparser.Row, 1000, 2000)
 		oldRows := s.Screen.Rows
 		oldY := s.Screen.Cursor.Y
