@@ -14,12 +14,12 @@ import (
 	"github.com/LeeEirc/terminalparser"
 	"github.com/jumpserver-dev/sdk-go/model"
 	"github.com/jumpserver-dev/sdk-go/service"
-	"github.com/jumpserver/koko/pkg/srvconn"
 
 	"github.com/jumpserver/koko/pkg/config"
 	"github.com/jumpserver/koko/pkg/exchange"
 	"github.com/jumpserver/koko/pkg/i18n"
 	"github.com/jumpserver/koko/pkg/logger"
+	"github.com/jumpserver/koko/pkg/srvconn"
 	"github.com/jumpserver/koko/pkg/utils"
 	"github.com/jumpserver/koko/pkg/zmodem"
 )
@@ -137,6 +137,7 @@ func (p *Parser) CurrentScreenType() int {
 
 func (p *Parser) initial(w, h int) {
 	screenType := p.CurrentScreenType()
+	p.disableInputAsCmd = config.GetConf().DisableInputAsCommand
 	p.TerminalParser = &TerminalParser{IsEnter: p.isEnterKeyPress,
 		EmitCommands:      p.EmitCommandEvent,
 		usqlScreenParser:  terminalparser.NewUSqlParser(),
@@ -144,10 +145,10 @@ func (p *Parser) initial(w, h int) {
 		mongoScreenParser: terminalparser.NewMongoShParser(),
 		screenType:        screenType,
 		preScreenType:     screenType,
+		disableInputAsCmd: p.disableInputAsCmd,
 		Screen:            terminalparser.NewScreen(h, w)}
 	p.closed = make(chan struct{})
 	p.cmdRecordChan = make(chan *ExecutedCommand, 1024)
-	p.disableInputAsCmd = config.GetConf().DisableInputAsCommand
 }
 
 func (p *Parser) SetUserInputFilter(filter func([]byte) []byte) {

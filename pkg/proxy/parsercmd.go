@@ -75,6 +75,8 @@ type TerminalParser struct {
 	winScreenParser   *terminalparser.WindowsParser
 	mongoScreenParser *terminalparser.MongoShParser
 	usqlScreenParser  *terminalparser.USqlParser
+
+	disableInputAsCmd bool
 }
 
 func (s *TerminalParser) SetState(state int) {
@@ -311,7 +313,7 @@ func (s *TerminalParser) WriteInput(chars []byte) (string, bool) {
 				}
 			}
 			if s.cmd == "" && cmd != "" && len(s.commands) == 0 {
-				if IsPasswordPrompt(s.Ps1sStr) {
+				if !s.disableInputAsCmd && IsPasswordPrompt(s.Ps1sStr) {
 					if terminalDebug {
 						fmt.Println("============ password Input ignore =============")
 						fmt.Println("ps1: ", s.Ps1sStr)
@@ -462,10 +464,10 @@ var passwordPromptRegexps = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\[sudo]\s*password\s*for\s+.*:`), // [sudo] password for user:
 	regexp.MustCompile(`(?i)enter\s+passphrase\s+for\s+.*:`), // SSH/GPG 私钥 passphrase
 	regexp.MustCompile(`(?i)passphrase\s+for\s+key\s+.*:`),   // git/ssh key 提示
-	regexp.MustCompile(`(?i)请输入密码[:：]?$`),                    // 中文
-	regexp.MustCompile(`(?i)mot de passe[:：]?$`),             // 法语
-	regexp.MustCompile(`(?i)contraseña[:：]?$`),               // 西班牙语
-	regexp.MustCompile(`(?i)senha[:：]?$`),                    // 葡萄牙语
+	regexp.MustCompile(`(?i)请输入密码[:：]?$`),
+	regexp.MustCompile(`(?i)mot de passe[:：]?$`), // 法语
+	regexp.MustCompile(`(?i)contraseña[:：]?$`),   // 西班牙语
+	regexp.MustCompile(`(?i)senha[:：]?$`),        // 葡萄牙语
 }
 
 func IsPasswordPrompt(ps1 string) bool {
