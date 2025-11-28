@@ -8,7 +8,7 @@ ARG VERSION
 ENV VERSION=$VERSION
 
 WORKDIR /opt/koko/ui
-RUN yarn build
+RUN  yarn install && yarn build
 
 WORKDIR /opt/koko
 RUN make build -s \
