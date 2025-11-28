@@ -3,11 +3,11 @@ module github.com/jumpserver/koko
 go 1.23.0
 
 require (
-	github.com/Azure/azure-storage-blob-go v0.6.0
+	github.com/Azure/azure-storage-blob-go v0.15.0
 	github.com/LeeEirc/elfinder v0.0.15
 	github.com/LeeEirc/tclientlib v0.0.3-0.20230803101925-fb52a90cb08d
 	github.com/LeeEirc/terminalparser v0.0.0-20220328021224-de16b7643ea4
-	github.com/aliyun/aliyun-oss-go-sdk v2.2.7+incompatible
+	github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible
 	github.com/aws/aws-sdk-go v1.44.306
 	github.com/creack/pty v1.1.24
 	github.com/elastic/go-elasticsearch/v6 v6.8.5
@@ -16,10 +16,10 @@ require (
 	github.com/gliderlabs/ssh v0.3.3
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/huaweicloud/huaweicloud-sdk-go-obs v3.21.1+incompatible
+	github.com/huaweicloud/huaweicloud-sdk-go-obs v3.25.4+incompatible
 	github.com/influxdata/influxdb-client-go/v2 v2.14.0
 	github.com/jarcoal/httpmock v1.0.4
-	github.com/jumpserver-dev/sdk-go v0.0.0-20250708102012-cc8ddd4e8cad
+	github.com/jumpserver-dev/sdk-go v0.0.0-20250915073438-24efe6250ad8
 	github.com/leonelquinteros/gotext v1.4.0
 	github.com/mediocregopher/radix/v3 v3.8.0
 	github.com/olekukonko/tablewriter v0.0.5
