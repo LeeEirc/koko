@@ -428,9 +428,9 @@ export const useTerminalSocket = () => {
       terminalRef.value.write(`\r\n`);
       terminalRef.value.write(`\x1B[31m${t('WebSocketClosed')}\x1B[0m`);
     };
-    const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+    // const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
     socketRef.value.onmessage = async (message: MessageEvent) => {
-      await sleep(1); // time sleep 0.001, avoid long write and block websocket send
+      // await sleep(1); // time sleep 0.001, avoid long write and block websocket send
       lastReceiveTime.value = new Date();
       if (typeof message.data === 'object') {
         handleBinaryMessage(message);
