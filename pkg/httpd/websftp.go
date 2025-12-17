@@ -3,10 +3,11 @@ package httpd
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/jumpserver/koko/pkg/logger"
-	"github.com/jumpserver/koko/pkg/session"
 	"io"
 	"strconv"
+
+	"github.com/jumpserver/koko/pkg/logger"
+	"github.com/jumpserver/koko/pkg/session"
 )
 
 var _ Handler = (*webSftp)(nil)
@@ -46,7 +47,9 @@ func (h *webSftp) HandleMessage(msg *Message) {
 
 func (h *webSftp) CleanUp() {
 	close(h.done)
-	h.volume.Close()
+	if h.volume != nil {
+		h.volume.Close()
+	}
 }
 
 type webSftpRequest struct {
@@ -92,6 +95,10 @@ func (h *webSftp) dispatch(msg Message) {
 	}
 
 	h.started = true
+	if h.volume == nil {
+		logger.Errorf("WebSftp volume not initialized: %s", h.ws.Uuid)
+		return
+	}
 
 	switch h.msg.Cmd {
 	case "list":

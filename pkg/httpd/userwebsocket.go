@@ -85,6 +85,11 @@ func (userCon *UserWebsocket) Run() {
 	defer cancel()
 	errorsChan := make(chan error, 1)
 	go userCon.writeMessageLoop(ctx)
+	if err := userCon.handler.CheckValidation(); err != nil {
+		logger.Errorf("Ws[%s] check validation err: %s", userCon.Uuid, err)
+		userCon.SendErrMessage(err.Error())
+		return
+	}
 	go func() {
 		if err := userCon.readMessageLoop(); err != io.EOF {
 			logger.Errorf("Ws[%s] read message err: %s", userCon.Uuid, err)
@@ -92,11 +97,6 @@ func (userCon *UserWebsocket) Run() {
 		}
 		logger.Infof("Ws[%s] read message done", userCon.Uuid)
 	}()
-	if err := userCon.handler.CheckValidation(); err != nil {
-		logger.Errorf("Ws[%s] check validation err: %s", userCon.Uuid, err)
-		userCon.SendErrMessage(err.Error())
-		return
-	}
 
 	if userCon.ConnectToken != nil && userCon.ConnectToken.Protocol == srvconn.ProtocolK8s {
 		var err error
