@@ -128,7 +128,7 @@ func (p *Parser) initial() {
 		mongoScreenParser: terminalparser.NewMongoShParser(),
 		screenType:        screenType,
 		preScreenType:     screenType,
-		Screen:            terminalparser.NewTerminalParser()}
+		Screen:            terminalparser.NewScreen(10, 50)}
 
 	p.closed = make(chan struct{})
 	p.cmdRecordChan = make(chan *ExecutedCommand, 1024)
