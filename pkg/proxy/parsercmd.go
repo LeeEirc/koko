@@ -12,6 +12,7 @@ import (
 	"unicode"
 
 	"github.com/LeeEirc/terminalparser"
+	"github.com/jumpserver/koko/pkg/logger"
 )
 
 var terminalDebug = false
@@ -141,6 +142,7 @@ func (s *TerminalParser) feed(p []byte) {
 	default:
 		// 默认就是 LinuxScreen
 		s.Screen.Feed(p)
+		s.ResizeRows()
 	}
 	if terminalDebug {
 		fmt.Println("---------Feed-------------")
@@ -227,6 +229,34 @@ func (s *TerminalParser) TrySrvOutput() string {
 
 func (s *TerminalParser) TryOutput() string {
 	return s.TrySrvOutput()
+}
+
+func (s *TerminalParser) ResizeRows() {
+	rowsLen := len(s.Screen.Rows)
+	if rowsLen >= 2000 {
+		newRows := make([]*terminalparser.Row, 1000, 2000)
+		oldRows := s.Screen.Rows
+		oldY := s.Screen.Cursor.Y
+		keep := 1000
+		start := rowsLen - keep
+		if start < 0 {
+			start = 0
+		}
+		latestRows := oldRows[start:]
+		copy(newRows, latestRows)
+		s.Screen.Rows = newRows
+		if oldY >= len(latestRows) {
+			s.Screen.Cursor.Y = len(latestRows)
+		}
+		// for gc
+		for i := 0; i < start; i++ {
+			oldRows[i] = nil
+		}
+		// for gc
+		oldRows = nil
+		latestRows = nil
+		logger.Debugf("Resize Y: %d, row Len: %d", s.Screen.Cursor.Y, len(s.Screen.Rows))
+	}
 }
 
 func IsPrintable(s string) bool {
