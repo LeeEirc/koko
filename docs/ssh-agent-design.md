@@ -4,7 +4,7 @@
 >
 > 状态：Draft / 可反复 Review
 >
-> 当前版本：`0.3.0`
+> 当前版本：`0.4.0`
 >
 > 更新时间：2026-07-13
 >
@@ -39,6 +39,7 @@
 | R0 | 2026-07-13 | 从研究总结提炼初稿 | Pending review | 评审 D-017/D-018 和 Phase 3 前置条件 |
 | R1 | 2026-07-13 | Tool 范围 | Accepted | 当前设计只保留 SSH/Linux terminal tools；非 SSH profile 另立设计 |
 | R2 | 2026-07-13 | 跨 Linux ResolvedAction 与 digest | Accepted | 用会话级执行画像、版本化 resolver、CommandIR 和 digest chain 约束解析、审批与实际 PTY 字节 |
+| R3 | 2026-07-13 | Agent Plan / Execute / Observe / Re-plan | Accepted | Plan 成为服务端版本化领域对象；步骤通过固定 Tool 即时解析并在 active PTY 执行 |
 
 ## 1. 决策摘要
 
@@ -70,6 +71,11 @@
 | D-024 | resolver 必须生成结构化 `CommandIR`，由 shell renderer 安全渲染；结果由同版本的 tool-specific output parser 解释 | Accepted |
 | D-025 | profile/capability 不足或无匹配 resolver 时只能显式探测或返回 unsupported，不得尝试“可能可用”的命令或任意 shell fallback | Accepted |
 | D-026 | 参数、执行画像、ResolvedAction、实际提交字节、审批对象和输出使用域隔离 digest 串联；执行前必须核对 revision 与 digest | Accepted |
+| D-027 | Agent Runtime 使用显式 `PlanState` 表达 Goal → Plan → Execute → Observe → Re-plan/Finish，而不是只把 plan 写在对话文本中 | Accepted |
+| D-028 | `PlanUpdate` 是 Runtime control action，不是 SSH Terminal Tool；Plan 只能引用已注册语义 Tool，不能包含自由 shell 或新增能力 | Accepted |
+| D-029 | 每个计划步骤在执行前按最新 profile/capability/policy 即时解析；Plan 确认不等于 action 审批，审批仍绑定 exact ResolvedAction | Accepted |
+| D-030 | 同一 active PTY 同时最多一个 executing step；ToolResult 为 failed/unknown/unsupported、上下文变化或用户接管时停止自动推进并显式 Re-plan/等待用户 | Accepted |
+| D-031 | 简单请求允许服务端合成一个可审计的单步 Plan；多步诊断、R2/R3 动作、用户要求或含 rollback 时必须先发布显式 Plan | Accepted |
 
 ## 2. 目标、范围与非目标
 
@@ -223,6 +229,7 @@ existing terminal WebSocket                 -> PTY bytes only
 - Agent 流不得塞进现有 terminal WebSocket handler；
 - Agent WebSocket 使用版本化 envelope、request ID、sequence、resume 和单 writer；
 - Go 输出 `UIMessageChunk` JSON，但内部持久化 canonical domain event；
+- Plan 使用独立 canonical events：`plan.created`、`plan.revised`、`plan.status_changed`、`step.started`、`step.status_changed`、`step.blocked`；message 文本不是 Plan 状态源；
 - `useObject` endpoint 返回 raw JSON body，不包装 SSE `data:`；
 - terminal session binding 必须校验 Cookie 用户、ConnectToken、session owner、资产/账号和 Core 权限，不能相信浏览器传入的 ID。
 
@@ -390,19 +397,118 @@ Transport
 
 一个 Agent session 同时最多一个 active run。一个 step 可以并行调用纯控制面只读工具，但同一 active terminal 的命令 tool 固定 `SupportsParallel=false`。
 
-### 7.2 Tool loop
+### 7.2 显式 `PlanState`
 
-1. 构造脱敏、限长、有来源的上下文；
-2. 调用 ModelClient，持久化 typed stream event；
-3. 收到 tool call 后严格 schema decode；
-4. 解析 semantic tool，生成 deterministic action；
-5. 计算 capability、risk、policy 和 approval；
-6. claim idempotency key；
-7. 控制面工具直接执行，命令工具提交 ActivePTYExecutor；
-8. 持久化 ToolResult，再回传下一轮模型；
-9. 达到 finish/预算/取消/失败条件后写明确 terminal outcome。
+Agent 的计划不能只存在于 assistant message 的 Markdown checklist 中。Markdown 适合展示，但无法可靠关联 tool call、审批、重连恢复和步骤状态。服务端必须维护版本化 `PlanState` 作为事实源：
 
-### 7.3 重试边界
+```text
+PlanState
+  plan_id/run_id/revision/plan_digest
+  goal: 用户目标的简洁规范化描述
+  mode: synthesized_single_step | explicit
+  status: draft | active | waiting_approval | waiting_user |
+          executing | replanning | succeeded | failed | cancelled |
+          needs_reconciliation
+  current_step_id
+  steps[]
+  success_criteria[]
+  budget: max_steps/max_tool_calls/max_replans/deadline
+  created_at/updated_at
+
+PlanStep
+  step_id/order/title/intent/step_intent_digest
+  depends_on[]
+  planned_tool_name? + argument_summary?   # 非可执行 preview
+  expected_observation
+  success_criteria[]
+  status: pending | ready | executing | waiting_approval | waiting_user |
+          succeeded | failed | skipped | blocked | unknown | cancelled
+  tool_call_ids[]/execution_ids[]/result_refs[]
+  status_reason/updated_at
+```
+
+只持久化用户可见的目标、简洁 rationale、步骤意图和证据标准，不要求也不保存模型私有 chain-of-thought。`planned_tool_name/argument_summary` 只是可读意图，不能作为执行载荷；真正执行时模型仍发出 strict ToolCall，Koko 再即时生成 `ResolvedAction`。
+
+Plan revision 单调递增。已 `succeeded/failed/unknown` 的历史步骤不可原地改写；Re-plan 只能保留历史并新增 revision，把尚未执行的旧步骤标记为 `skipped/blocked` 和原因。这样重连后的 UI、审计和恢复不会看到一份被模型静默改写的历史。
+
+### 7.3 `PlanUpdate` 与 SSH Tool 的边界
+
+模型响应允许三类 canonical action：`PlanUpdate`、`ToolCall`、`FinalResponse`。`PlanUpdate` 由 AgentLoop 处理，是无远端副作用的 Runtime control action，不进入 SSH `ToolRegistry`、CapabilitySet 或 active PTY：
+
+- 创建初始 Plan 或替换当前 revision 的 pending 部分；
+- 模型可以基于 observation 提议完成/失败解释，但 authoritative step transition 只由 Koko 状态机按 ToolResult/success criteria 写入；模型不能直接把步骤标为成功；
+- 只能引用服务端已下发的固定 Tool 名称，不能嵌入 shell、resolver、自由参数片段或创建 Tool；
+- Koko 校验 step 数量、依赖无环、预算、Tool 可见性和 plan revision 后才持久化；
+- provider 若只能用 function calling 表达，adapter 可暴露保留函数 `koko_update_plan`，但必须映射为 `PlanUpdate`，不能注册成可执行 Terminal Tool。
+
+Plan 是编排约束，不是权限对象。用户点击“确认计划”只表示同意诊断方向，不授权其中未来命令；每个实际 ToolCall 仍经过 capability、profile、CommandGuard 和按风险需要的 exact action approval。反过来，一次 action approval 也不能授权计划中的其他步骤。
+
+### 7.4 何时必须先 Plan
+
+为避免简单问题产生仪式化步骤，同时保证复杂执行可预见，采用两种模式：
+
+| 场景 | Plan 模式 | 行为 |
+| --- | --- | --- |
+| 纯解释、读取当前 snapshot、一个 R0/R1 Tool 即可完成 | `synthesized_single_step` | AgentLoop 创建并审计单步 Plan，可不单独展示确认页 |
+| 预计需要两个及以上远端命令 | `explicit` | 先发布简洁步骤，再执行第一步 |
+| 任意 R2/R3、配置/状态变更或 rollback | `explicit` | 必须展示目标、影响、验证和回滚步骤；action 仍逐项审批 |
+| 用户明确要求先计划/只计划 | `explicit` | “只计划”模式禁止进入 Execute |
+| 目标/环境含关键歧义 | `explicit + waiting_user` | 先请求用户补充，不通过猜测执行消除歧义 |
+
+服务端根据已知目标、Tool 数量、风险和用户选项执行最低门禁；模型不能通过声称“这是单步/低风险”降级 Plan 要求。若执行中发现任务实际变为多步或高风险，必须从 synthesized 模式升级为 explicit revision。
+
+### 7.5 Run / Step 状态机
+
+```text
+CREATED -> PLANNING -> PLAN_ACTIVE -> EXECUTING_STEP
+                         ^              |
+                         |              v
+                    REPLANNING <- OBSERVING
+                         |              |
+                         |              +-> WAITING_APPROVAL
+                         |              +-> WAITING_USER
+                         |              +-> NEEDS_RECONCILIATION
+                         +--------------+-> FINISHED / FAILED / CANCELLED
+```
+
+同一 run 只有一个 authoritative Plan revision，同一 Plan 最多一个 `executing` SSH step。只有依赖已完成、仍符合当前 capability 且无 pending approval/execution 的步骤才能进入 `ready`。控制面只读 Tool 即使允许有限并行，也必须分别绑定 step/tool call/result，不能并发改变 Plan revision。
+
+`succeeded` 必须由满足 success criteria 的 observation 支撑，不能只因为模型说成功；PTY completion 或 parser 不确定时步骤为 `unknown`。对于变更步骤，“提交成功”不等于业务成功，必须等待预定义 post-check；post-check unknown 时计划不能自动完成。
+
+### 7.6 Plan-aware Tool loop
+
+1. 构造脱敏、限长、有来源的上下文，包含当前 Plan revision、步骤和预算；
+2. 必要时接收并校验 `PlanUpdate`，持久化 `plan.created/plan.revised`；
+3. 选择唯一 ready step，调用 ModelClient；
+4. 收到 ToolCall 后严格 schema decode，并校验 tool 与 step intent/capability 相容；
+5. 绑定 `run_id + plan_id + plan_revision + step_id + step_intent_digest + tool_call_id`；
+6. 按最新 profile 解析 semantic Tool，冻结 deterministic `ResolvedAction`；
+7. 计算 risk/policy/approval，claim idempotency key；
+8. 控制面 Tool 执行或将命令 Tool 提交 ActivePTYExecutor；
+9. 持久化 ToolResult/observation，按 success criteria 更新步骤；
+10. 若未完成则 Re-plan/推进下一步，再把 observation 回传模型；
+11. 达到 goal、预算、取消、失败或 reconciliation 条件后写明确 terminal outcome。
+
+步骤必须即时 resolve，不能在创建 Plan 时预生成并长期保存所有命令。原因是后续 observation、PWD、Linux profile、权限和 policy 会变化；提前生成会使后续 action 在执行时过期，也会诱导 UI 把计划预览误认为最终审批命令。
+
+### 7.7 Observe 与 Re-plan
+
+以下情况必须停止自动推进并产生显式状态转换：
+
+- ToolResult 为 `failed/partial/unknown/unsupported_profile`；
+- observation 不满足 success criteria 或与计划假设矛盾；
+- profile、binding、PWD、capability 或 policy revision 改变；
+- 用户拒绝审批、编辑目标、手工输入、Take over 或中断；
+- action stale、write partial、session disconnect 或预算即将耗尽；
+- 下一步骤需要当前 Registry 不存在的能力。
+
+可安全继续时进入 `REPLANNING`，生成新 plan revision，并明确保留/跳过/新增哪些 pending 步骤及原因。需要用户决定时进入 `WAITING_USER`；可能已产生副作用但事实不清时进入 `NEEDS_RECONCILIATION`，禁止模型通过再次调用同一 Tool“试试看”。无安全可行路径时应以 `blocked/failed` 结束，并给出已观察事实和人工建议。
+
+`FinalResponse` 只能在没有 executing action/pending approval 时结束 run。只有 goal-level success criteria 有证据满足才能标 `succeeded`；否则 final response 必须对应 `blocked/failed/cancelled/needs_reconciliation` 等真实 outcome，不能用一段乐观总结覆盖未完成步骤。
+
+为了防止无界 ReAct 循环，每个 run 固定 `max_model_turns/max_steps/max_tool_calls/max_replans/deadline/token_budget/output_budget`。接近上限时优先总结和询问用户，达到硬上限立即停止新 action；预算扩展只能由用户或服务端策略决定，模型不能自增。
+
+### 7.8 重试边界
 
 - 尚未收到任何模型输出/tool action 时，可以有限重试相同 provider 请求；
 - 收到任何可执行 action 后禁止透明重放原请求；
@@ -410,9 +516,13 @@ Transport
 - provider 首个 event 后禁止静默切换厂商；
 - WebSocket/UI 序列化失败不能导致 tool 重跑。
 
-### 7.4 取消
+### 7.9 取消
 
-UI Stop、`/stop`、权限失效和管理员终止统一进入 `CancelRun`：取消模型、拒绝 pending approval、停止未提交 action、更新 run 状态并审计。已经写入 PTY 的命令只有显式 `InterruptExecution` 才会尝试 Ctrl+C。
+UI Stop、`/stop`、权限失效和管理员终止统一进入 `CancelRun`：取消模型、拒绝 pending approval、把未执行步骤标为 `skipped/cancelled`、停止未提交 action、更新 Plan/Run 状态并审计。已经写入 PTY 的命令只有显式 `InterruptExecution` 才会尝试 Ctrl+C；中断结果未知时 Run 不能直接标记 cancelled-success。
+
+### 7.10 Plan 与 Runbook
+
+动态 Plan 是当前 run 内由模型提出、可随 observation 修订的任务编排；Runbook 是管理员审核发布、具有稳定版本和固定输入/步骤的运维资产。Plan 可以在 Phase 4 通过 `execute_runbook_step(runbook_version, step_id, inputs)` 引用已发布 Runbook，但不能修改或发布 Runbook，也不能把一次动态 Plan 自动保存为可信 Runbook。Runbook 步骤同样即时解析、逐项授权并受 active PTY/unknown 约束；“已发布”只证明模板经过审核，不代表当前用户、会话或 action 已获授权。
 
 ## 8. Tool、能力与风险
 
@@ -557,6 +667,7 @@ CommandIR
 ResolvedAction
   action_version
   tool_name/tool_version/tool_call_id
+  run_id/plan_id/plan_revision/plan_digest/step_id/step_intent_digest
   normalized_arguments + arguments_digest
   resolver_id/resolver_version/output_parser_version
   linux_profile_revision + linux_profile_digest
@@ -587,11 +698,13 @@ digest = SHA-256("koko:ssh-agent:<object-kind>:v1\0" || canonical_bytes)
 
 | Digest | 覆盖内容 | 意义 |
 | --- | --- | --- |
+| `plan_digest` | goal、plan revision、顺序化步骤意图/依赖/成功标准和预算，不含 display-only 文本 | 锁定执行时所依据的计划版本；不是整份计划的执行授权 |
+| `step_intent_digest` | step ID、意图、依赖、expected observation 和 success criteria | 防止 ToolCall/结果被挂到内容已改变但 ID 相同的步骤 |
 | `arguments_digest` | strict decode/语义校验后的参数 | 识别参数在模型输出、resolver 和审计之间是否变化 |
 | `linux_profile_digest` | 影响 resolver 的 profile facts、revision 和证据引用 | 证明动作是基于哪一版会话环境解析，不代表远端事实可信 |
 | `command_bytes_digest` | InputGateway 将提交的**完整精确字节**，包括提交分隔符 | 防止 preview 相同但实际字节不同，也防止审批后修改 quoting/flag/目标 |
 | `resolved_action_digest` | 除自身 digest/display-only 字段外的规范化 ResolvedAction，包含上述 digest、binding、resolver 和约束 | 给 action 一个稳定内容身份，串联策略、审批、执行和恢复 |
-| `approval_subject_digest` | action digest、tool call/run/session、policy/capability revision、审批 scope 和 expiry | 限定“谁批准了哪个会话的哪次动作，在什么策略和期限下有效” |
+| `approval_subject_digest` | action digest、plan/step digest、tool call/run/session、policy/capability revision、审批 scope 和 expiry | 限定“谁批准了哪个计划步骤、哪个会话的哪次动作，在什么策略和期限下有效” |
 | `output_digest` | execution correlation 后保存的原始受限输出 bytes 或受控 `ToolOutputRef` 内容 | 检测结果在保存、裁剪、模型消费和审计之间是否变化 |
 
 域隔离的原因是：即使两个对象偶然有相同 canonical bytes，也不能把 `output_digest` 当成 `approval_subject_digest` 使用。版本字段使未来更换 canonicalization、hash 或字段集合时能够并行验证旧记录，而不是静默改变历史语义。
@@ -605,6 +718,7 @@ digest = SHA-256("koko:ssh-agent:<object-kind>:v1\0" || canonical_bytes)
 digest 在本设计中解决的是**内容完整性和跨阶段关联**：
 
 - 把“模型请求 → resolver 结果 → 用户审批 → PTY 实际 bytes → ToolResult”连成可核对的证据链；
+- 把 Plan revision/step intent 与 ToolCall/ResolvedAction/ToolResult 关联，防止 Re-plan 后沿用旧步骤的 pending action；
 - 在 profile、policy、capability 或参数变化时可靠识别 TOCTOU，并触发重新解析/审批；
 - 为幂等提交、崩溃恢复、跨节点 continuation 和重复 action/result 去重提供稳定 key；
 - 让审计能够回答“审批看到的是否就是最终写入的内容”，而不是依赖容易变化的 UI 文本；
@@ -851,7 +965,7 @@ Koko/xterm 没有 Warp 自绘 Editor 的完整 buffer model，必须维护：
 
 Provider contract 必须统一：
 
-- typed text/reasoning/tool-call/usage/finish/error events；
+- typed text/reasoning/plan-update/tool-call/usage/finish/error events；
 - canonical finish reason 和 provider raw metadata；
 - capability/warning；
 - request/attempt ID；
@@ -865,6 +979,9 @@ OpenAI Responses 每次显式 `store:false`。Koko 保存 canonical conversation
 
 - xterm 保持主执行面；
 - Agent Drawer 展示 Conversation、Plan、Tool、Approval、Execution；
+- Plan 以结构化 step timeline 展示 revision、当前步骤、状态、依赖、预期观察和完成证据，不从 assistant Markdown 反向解析；
+- Re-plan 显示 revision diff 和触发原因；已完成/unknown 步骤保留，不被新计划覆盖；
+- 提供“只生成计划”“确认方向”“停止”“Take over”操作；确认方向必须明确提示“不代表批准后续命令”；
 - CompletionMenu/GhostSuggestion 作为 overlay，不写入 xterm output buffer；
 - active PTY control owner、running execution 和 Take over 必须持续可见；
 - risky action 显示规范化命令、资产、账号、风险、审批对象和验证计划。
@@ -872,8 +989,8 @@ OpenAI Responses 每次显式 `store:false`。Koko 保存 canonical conversation
 ### 11.2 状态权威
 
 - `useChat.messages` 是前端 message/tool part 投影；
-- Koko Repository/domain event 是服务端事实源；
-- pending approval、execution 和 run 可在 Drawer 卸载/重连后恢复；
+- Koko Repository/domain event 是服务端事实源；PlanStore 按 canonical plan events 投影，不以 `useChat.messages` 为权威；
+- pending plan revision、approval、execution 和 run 可在 Drawer 卸载/重连后恢复；
 - Pinia 不复制一套独立 conversation 事实；
 - UI 不能仅通过隐藏输入或禁用按钮实现 lease/权限。
 
@@ -881,7 +998,7 @@ OpenAI Responses 每次显式 `store:false`。Koko 保存 canonical conversation
 
 必须持久化：
 
-- Agent session/run/step 状态与 revision；
+- Agent session/run、完整 Plan revision history、step 状态/依赖/证据/预算及 `plan_digest/step_intent_digest`；
 - canonical message/event 和 provider attempt；
 - tool schema version、规范化参数及 `arguments_digest`；
 - `LinuxExecutionProfile` revision/digest/evidence refs、resolver/parser version 和完整 `ResolvedAction`；
@@ -900,7 +1017,7 @@ OpenAI Responses 每次显式 `store:false`。Koko 保存 canonical conversation
 - 权限、policy、session readiness 在恢复时重新验证；
 - 无法恢复时进入 `NEEDS_RECONCILIATION`，不能静默丢弃。
 
-审计必须回答：谁提出目标、模型看到什么、使用哪个 provider/model/prompt、生成什么 tool、哪条策略决定、谁批准、实际写入什么命令、何时进入哪个 PTY、用户是否接管、结果是否确定、输出是否裁剪/脱敏、是否发生重试。
+审计必须回答：谁提出目标、何时生成/修改哪版 Plan、为何 Re-plan、每一步由什么 observation 判定、模型看到什么、使用哪个 provider/model/prompt、生成什么 tool、哪条策略决定、谁批准、实际写入什么命令、何时进入哪个 PTY、用户是否接管、结果是否确定、输出是否裁剪/脱敏、是否发生重试。
 
 ## 13. 安全边界
 
@@ -909,7 +1026,8 @@ OpenAI Responses 每次显式 `store:false`。Koko 保存 canonical conversation
 - Agent 权限不超过发起用户和当前 session；
 - ToolRegistry/CapabilitySet/CommandGuard/Core 是权限权威；
 - prompt injection 不能修改工具集合、审批或风险策略；
-- approval 必须绑定 `approval_subject_digest`；其中包含 `resolved_action_digest`、policy/capability revision、session、scope 和 expiry；
+- Plan/step 文本和模型给出的 risk/success 声明都不具授权效力；Plan 不得承载自由 shell，Plan 确认不批量授权后续 action；
+- approval 必须绑定 `approval_subject_digest`；其中包含 plan/step digest、`resolved_action_digest`、policy/capability revision、session、scope 和 expiry；
 - display preview 不作为执行事实；InputGateway 只接受被冻结且 digest/revision 全部匹配的 submission bytes；
 - profile 未知、resolver 不匹配、action stale 或 write partial 时 fail closed，不能换命令或自动重发；
 - 模型输出、terminal output、tool output 都是不可信数据；
@@ -939,8 +1057,8 @@ OpenAI Responses 每次显式 `store:false`。Koko 保存 canonical conversation
 
 ```text
 internal/agent/
-  domain/                 session/run/tool/approval/execution/events
-  application/            prompt/approve/cancel/resume/agent loop
+  domain/                 session/run/plan/step/tool/approval/execution/events
+  application/            prompt/plan validation/step transition/approve/cancel/resume/agent loop
   ports/                  model/policy/repository/active-terminal/metadata/audit
   adapters/
     llm/                  openai-responses/openai-compatible/contract tests
@@ -956,7 +1074,8 @@ internal/agent/
 
 ### Phase 0：契约与安全基线
 
-- 定义 session/run/tool/execution/approval/event DTO 和状态机；
+- 定义 session/run/Plan/step/tool/execution/approval/event DTO 和状态机；
+- 定义 `PlanUpdate` canonical action、Plan/step digest、revision 和恢复契约；
 - 定义 capability、risk、InputSource、error code；
 - 定义 version/sequence/reconnect/idempotency/side-effect boundary；
 - 为现有 Parser ACL/review/command record 建 characterization tests。
@@ -967,11 +1086,13 @@ internal/agent/
 - 建立 session-scoped `LinuxExecutionProfile`、evidence/revision/TTL/invalidation 契约；首版只收集事实，不执行业务命令；
 - 实现 SSH history/static/受控 command/service/path metadata completion 与 ghost overlay；
 - 建立 Agent WS、Go canonical events、Vue `useChat`；
+- 实现 PlanStore/step timeline 和“只生成计划”模式；此阶段 Plan 不触发远端执行；
 - 只开放 inspect/propose/explain，不发送 Enter。
 
 ### Phase 2：模型与 AI completion
 
 - 接入 provider registry 和 OpenAI Responses adapter；
+- 接入 PlanUpdate adapter、Plan validator、预算/循环上限和离线 plan quality eval；
 - 接入 `useObject` AI completion；
 - 完成 secret redaction、budget、provider contract fixtures；
 - AI 只建议，不执行。
@@ -983,6 +1104,7 @@ internal/agent/
 - 实现版本化 ResolverRegistry、CommandIR/shell renderer、tool-specific output parser 和 digest chain；
 - 完成 Ubuntu/Debian、RHEL 系、Alpine/OpenRC、SUSE 和 BusyBox/restricted-shell 的明确支持或 unsupported 矩阵；
 - Review D-021，首批只开放 `inspect_system`、`inspect_disk`、`inspect_process`、`inspect_port`、`inspect_service` 和有限 `read_log`；
+- 将 ToolCall 与 plan revision/step intent 绑定，按 Observe 证据推进或 Re-plan；单步和多步均不得绕过 PlanState；
 - 实现 running/unknown、inspect、takeover 和 interrupt。
 
 ### Phase 4：单步变更和单 session Runbook
@@ -1021,7 +1143,15 @@ internal/agent/
 19. locale、彩色/截断/恶意输出、flag 差异、parser failure 全部返回 bounded partial/unknown，不把解析失败解释成业务状态；
 20. arguments/profile/action/approval/command bytes/raw output/model view 的域隔离 digest 不能跨类型替换；policy/profile/capability 任一 revision 变化都会拒绝旧 approval；
 21. write 0 byte、部分写、完整写后断线分别产生可审计 receipt；部分写/unknown 不自动重发；
-22. command preview 的空白、escape、Unicode 显示差异不能影响 exact bytes 校验，且任何 approval 后 payload mutation 都被拒绝。
+22. command preview 的空白、escape、Unicode 显示差异不能影响 exact bytes 校验，且任何 approval 后 payload mutation 都被拒绝；
+23. 单步简单请求生成 `synthesized_single_step`；多命令、R2/R3、rollback、关键歧义和“只计划”正确进入 explicit/waiting 模式；
+24. Markdown 中伪造 checklist/step status 不改变 PlanStore；未知 Tool、自由 shell、循环依赖、越界 step 和 stale revision 的 PlanUpdate 被拒绝；
+25. 每个 ToolCall/ResolvedAction/ToolResult 都绑定同一 `plan_id/revision/step_id/step_intent_digest`；Re-plan 后旧 pending action/approval 失效；
+26. Plan 确认不会批量批准 action；逐项审批、拒绝、过期和 policy 变化仍按 exact action 生效；
+27. failed/partial/unknown/unsupported、success criteria 不满足、用户 Take over 和 context revision 变化不会把步骤标为 succeeded 或自动推进；
+28. 已结束步骤在 Re-plan 中不可被改写，新 revision 能完整展示保留/跳过/新增步骤及原因；
+29. plan events 重连/replay 能重建相同 PlanStore，且不能触发 Tool 重放；
+30. max turns/steps/tool calls/replans/deadline/token/output budget 达到硬上限后停止新 action，模型不能自行扩容。
 
 ### 16.2 关键指标
 
@@ -1033,6 +1163,8 @@ internal/agent/
 - unknown completion/exit-code ratio；
 - profile unknown/stale rate、resolver coverage/unsupported rate、output parser unknown rate；
 - action-to-write digest match、partial write 和 stale approval rejection；
+- single-step/explicit plan ratio、plan-to-first-action latency、step success/unknown/blocked rate；
+- replan rate/reason、平均 tool calls per goal、budget termination、user plan edit/stop/takeover rate；
 - tool policy rejection/approval/timeout；
 - completion p50/p95、coverage、acceptance、edit distance；
 - model cost/token/latency 和 redaction hit；
@@ -1052,6 +1184,8 @@ internal/agent/
 | O-008 | D-021 首批六个 SSH 命令 Tool 的最终 Schema、resolver 和 distro 支持矩阵 | golden fixtures、ACL 回归、脱敏与 unknown-rate 原型 | Phase 3 前 |
 | O-009 | profile bootstrap/shell integration 能可靠识别哪些上下文切换，TTL 如何分层 | Bash/Zsh/BusyBox/restricted shell、su/sudo/container/nested SSH 原型与 false-fresh 数据 | Phase 3 前 |
 | O-010 | 审计存储是否需要 HMAC/event chain 或外部不可变存储 | 审计篡改威胁模型、密钥轮换、验证与归档成本 | 安全评审前 |
+| O-011 | explicit Plan 门槛和各类 run budget 默认值 | 离线任务集、灰度 replan/unknown/用户打断率、延迟与成本 | Phase 2/3 上线前 |
+| O-012 | success criteria 中哪些能确定性计算，哪些只能请求用户确认 | 首批 Tool result fixtures、误成功/误失败评估 | Phase 3 前 |
 
 ## 18. 已拒绝方案
 
@@ -1072,6 +1206,10 @@ internal/agent/
 | 按模型常识或资产 OS 标签直接生成 Linux 命令 | 无法反映当前 PTY 的 shell/init/PATH/container/nested SSH，审批对象不确定 |
 | 在一个命令中用 `a || b` 探测并 fallback | 实际分支在审批前未知，输出 parser 和审计语义不唯一 |
 | digest 相同就视为已授权或执行成功 | digest 只证明内容一致，不提供身份、权限、远端执行或输出真实性 |
+| 只在 assistant Markdown 中维护 Plan | 无版本、状态约束和 tool/result 关联，重连后无法可靠恢复 |
+| 创建 Plan 时预生成全部 shell 命令 | 后续 profile/PWD/policy 可能变化，命令会 stale，计划预览也会被误认为审批对象 |
+| 用户确认 Plan 即批量授权全部步骤 | 计划只是方向，未来 exact action/风险/环境尚未确定，不能替代逐项策略和审批 |
+| 模型无 observation 即把步骤标为成功 | 语言声明不能替代 ToolResult、post-check 或用户确认 |
 
 ## 19. 修订记录
 
@@ -1080,6 +1218,7 @@ internal/agent/
 | 0.1.0 | 2026-07-13 | 从 `terminal-ssh-agent-summary.md` 提炼正式设计；确定 active PTY、Go/Vue/AI SDK、provider、补全、安全、实施和 Review 规则 |
 | 0.2.0 | 2026-07-13 | 将 Tool 范围收敛为 SSH/Linux terminal；补充固定后端 ToolDefinition、上下文/执行控制/只读/变更 Tool 清单、resolver 约束和明确拒绝项 |
 | 0.3.0 | 2026-07-13 | 增加会话级 LinuxExecutionProfile、版本化 ResolverRegistry、CommandIR/output parser、stale/re-resolve 规则及域隔离 digest chain；说明 digest 的安全意义与边界 |
+| 0.4.0 | 2026-07-13 | 将 Plan/step 提升为版本化服务端领域对象；增加 PlanUpdate、单步/显式 Plan 门禁、Plan-aware Execute/Observe/Re-plan 状态机、step/action digest 绑定、UI/恢复/测试规范 |
 
 ## 20. 证据与参考入口
 

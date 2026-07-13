@@ -12,6 +12,7 @@
 
 - 正式设计当前只纳入 SSH/Linux terminal tools；本文中 K8s、数据库、SFTP 等能力分析继续作为未来研究材料，不代表进入当前 `ToolRegistry`，具体决策和 SSH Tool 清单以 `ssh-agent-design.md` D-019~D-022/第 8 节为准；
 - ResolvedAction 不再按泛化“Linux”或模型常识直接生成：正式设计 D-023~D-026 要求使用当前 SSH session 的 `LinuxExecutionProfile`、版本化 resolver、CommandIR/tool-specific parser，并以域隔离 digest 串联参数、画像、动作、审批、PTY exact bytes 和输出；
+- Agent 能力明确采用 Goal → Plan → Execute → Observe → Re-plan/Finish：正式设计 D-027~D-031 将 Plan/step 作为服务端版本化领域对象；PlanUpdate 不属于 SSH Tool，实际步骤仍逐项通过固定 Tool、即时 ResolvedAction、审批和 active PTY；
 - 重新审查并确定 Terminal Agent 的执行面：所有会改变当前远端会话状态的命令型 tool call 默认通过当前 **active PTY**，进入与人工输入相同的 `Room/SwitchSession -> Parser -> ACL/复核 -> srvConn -> Recorder` 链路；独立 SSH exec 不再是 Terminal Agent 默认实现；
 - active PTY 不是直接 `srvConn.Write` 或向 Room 裸塞字节：新增服务端 `ActiveTerminalBinding`、`InputLease`、带 ack 的 `AgentInputGateway`、Parser 安全状态门禁、`execution_id/tool_call_id` 关联和异步 execution result；
 - 明确独立 Structured Executor 只属于未来显式创建的后台 Task Agent，不能作为 active PTY 失败后的静默 fallback；命令历史、资产/策略读取等控制面工具不需要伪装成 SSH 命令；
@@ -4368,6 +4369,72 @@ digest 的边界同样重要：普通 SHA-256 不是签名或授权，不证明�
 - 监控 profile unknown/stale、resolver unsupported、parser unknown、action-to-write digest mismatch 和 stale approval rejection。
 
 规范性字段、状态与上线门禁以 [ssh-agent-design.md §8.2](./ssh-agent-design.md#82-tool-是否固定) 的 D-023~D-026 为准。
+
+### 15.17 Plan / Execute / Observe / Re-plan 能力如何落地
+
+#### 15.17.1 当前缺口与结论
+
+此前架构图和 Tool loop 已提到 Agent Loop/Plan，也能通过多轮 tool call 形成 ReAct，但 Plan 只出现在 UI 名称和对话语义中，没有明确的服务端数据结构、revision、步骤状态、执行绑定和恢复规则。这会退化成“模型在 Markdown 里列清单，然后连续调用工具”：UI 无法判断哪步真的执行、重连无法恢复、模型还能在下一条消息里静默改写历史。
+
+正式设计因此将能力明确为：
+
+```text
+Goal
+  -> PlanState(revision, ordered steps, success criteria, budget)
+  -> Execute one ready step through a fixed semantic Tool
+  -> Observe bounded ToolResult/evidence
+  -> update step from evidence
+  -> Re-plan with a new revision, Finish, WaitUser or Reconcile
+```
+
+Plan 是 Agent 的控制状态，Tool 是资产能力，ResolvedAction 是当前环境下的一次确定执行，三者不能合并。
+
+#### 15.17.2 Plan 为什么不是普通 Tool 或 shell 脚本
+
+`PlanUpdate` 是 AgentLoop 的 Runtime control action，不进入 SSH ToolRegistry，也不写 active PTY。它只能创建/修订结构化步骤、依赖、预期 observation 和 success criteria；只能引用已注册 Tool 名称，不能携带自由 shell、resolver 或临时创造能力。provider 只支持 function calling 时可以用保留函数传输，但 adapter 收到后映射为 PlanUpdate，而不是 Terminal ToolCall。
+
+这个区分有两个原因：第一，更新计划本身没有远端副作用，不应进入 SSH ACL/执行链；第二，若 Plan 能保存 shell，它会成为 `run_command` 的旁路，绕过 strict schema、Linux resolver 和 CommandGuard。
+
+Plan 也不保存私有 chain-of-thought。持久化的是用户可见 goal、简洁 rationale、step intent、expected observation 和完成证据，足以审计和恢复，不要求模型暴露内部推理过程。
+
+#### 15.17.3 Execute 如何体现
+
+Execute 不是一个通用 `execute(plan)` Tool，而是 AgentLoop 对唯一 ready step 的推进：
+
+1. ToolCall 绑定 `run_id + plan_id + plan_revision + step_id + step_intent_digest`；
+2. 执行前加载最新 binding/profile/capability/policy；
+3. resolver 即时生成 exact ResolvedAction；
+4. action 按风险经过逐项审批，通过 active PTY 执行；
+5. ToolResult/observation 回绑同一步骤，由 success criteria 决定 succeeded/failed/unknown；
+6. 下一步只有在依赖完成且 context 仍有效时才能 ready。
+
+不能在 Plan 创建时预生成后续所有命令，因为第一步 observation 可能改变 PWD、profile、目标假设或 policy。即时 resolve 保证真正审批和执行的是当时环境中的 exact action。
+
+#### 15.17.4 单步与显式 Plan
+
+所有 run 都有 PlanState，但交互强度不同。纯解释或一个 R0/R1 Tool 可完成时，由服务端生成 `synthesized_single_step`，避免简单任务出现多余确认。预计两个以上远端命令、任意 R2/R3/rollback、用户明确要求计划或存在关键歧义时必须使用 explicit Plan；“只计划”模式禁止进入 Execute。
+
+模型不能自行把高风险任务声明成单步以降低门禁。执行中若发现任务扩展为多步/高风险，必须升级为新的 explicit revision。
+
+#### 15.17.5 Observe、Re-plan 与成功语义
+
+步骤状态必须来自 evidence，而不是模型语言。提交 PTY 不等于完成，命令结束不等于业务目标成功，变更必须有 post-check；PTY/解析不确定就保持 unknown。
+
+failed/partial/unknown/unsupported、success criteria 不满足、profile/policy/context 变化、审批拒绝、用户输入/Take over、partial write、断线或预算不足都会停止自动推进。可安全调整时生成新 revision；需要选择时等待用户；可能已产生副作用但状态不清时进入 reconciliation，不能再次调用同一 Tool 猜结果。
+
+Re-plan 不覆盖历史。已结束 step 保持不可变，旧 pending step 明确 skipped/blocked，新 revision 记录保留、删除、新增内容和原因。这样 Plan timeline 与 action/result audit 可以完整重放。
+
+#### 15.17.6 Plan digest 和审批边界
+
+新增 `plan_digest` 锁定 goal、revision、步骤顺序/依赖/success criteria/budget，`step_intent_digest` 锁定单步语义。ResolvedAction 携带两者，Re-plan 后旧 pending action/approval 自动失效。
+
+用户“确认 Plan”只确认执行方向，不等于批准所有命令。`approval_subject_digest` 仍绑定具体 plan/step、ResolvedAction、PTY exact bytes、policy/capability revision、session、scope 和 expiry。原因是计划阶段尚不知道未来真实 profile、最终 flags、输出影响和风险，批量批准会把计划预览错误提升为执行授权。
+
+#### 15.17.7 循环上限和 UI
+
+每个 run 必须限制 model turns、steps、tool calls、replans、deadline、token 和 output budget，防止 ReAct 因反复 unknown 或错误自修复进入无界循环。模型不能自行扩大预算。
+
+UI 使用服务端 plan events 渲染 step timeline、当前 step、revision diff、expected observation、完成证据和 blocked/unknown 原因，不从 assistant Markdown 解析状态。Drawer 重连从 PlanStore 恢复；event replay 只恢复投影，不能触发 Tool 重放。规范性设计与测试门禁以 [ssh-agent-design.md §7](./ssh-agent-design.md#7-agent-runtime) 的 D-027~D-031 为准。
 
 ## 16. 参考源码
 
