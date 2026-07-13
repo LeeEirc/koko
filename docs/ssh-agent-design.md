@@ -4,7 +4,7 @@
 >
 > 状态：Draft / 可反复 Review
 >
-> 当前版本：`0.4.0`
+> 当前版本：`0.5.0`
 >
 > 更新时间：2026-07-13
 >
@@ -40,6 +40,7 @@
 | R1 | 2026-07-13 | Tool 范围 | Accepted | 当前设计只保留 SSH/Linux terminal tools；非 SSH profile 另立设计 |
 | R2 | 2026-07-13 | 跨 Linux ResolvedAction 与 digest | Accepted | 用会话级执行画像、版本化 resolver、CommandIR 和 digest chain 约束解析、审批与实际 PTY 字节 |
 | R3 | 2026-07-13 | Agent Plan / Execute / Observe / Re-plan | Accepted | Plan 成为服务端版本化领域对象；步骤通过固定 Tool 即时解析并在 active PTY 执行 |
+| R4 | 2026-07-13 | CloudWeGo Eino + AI SDK Vue 可行性 | Conditional feasible / Proposed | 以 Eino `v0.9.12` 做只读 PoC；只允许作为可替换编排 adapter，PoC 通过门禁后再决定正式采用 |
 
 ## 1. 决策摘要
 
@@ -76,6 +77,7 @@
 | D-029 | 每个计划步骤在执行前按最新 profile/capability/policy 即时解析；Plan 确认不等于 action 审批，审批仍绑定 exact ResolvedAction | Accepted |
 | D-030 | 同一 active PTY 同时最多一个 executing step；ToolResult 为 failed/unknown/unsupported、上下文变化或用户接管时停止自动推进并显式 Re-plan/等待用户 | Accepted |
 | D-031 | 简单请求允许服务端合成一个可审计的单步 Plan；多步诊断、R2/R3 动作、用户要求或含 rollback 时必须先发布显式 Plan | Accepted |
+| D-032 | Eino 只可作为 `application` 之后的可替换 Agent 编排 adapter；Koko PlanState、policy、approval、event store、active PTY gateway 仍是权威，是否正式采用取决于只读 PoC | Proposed / 待 PoC |
 
 ## 2. 目标、范围与非目标
 
@@ -1061,6 +1063,7 @@ internal/agent/
   application/            prompt/plan validation/step transition/approve/cancel/resume/agent loop
   ports/                  model/policy/repository/active-terminal/metadata/audit
   adapters/
+    orchestration/eino/     可选 Eino Runner/event/checkpoint bridge；不得进入 domain/ports
     llm/                  openai-responses/openai-compatible/contract tests
     active_terminal/      binding/input gateway/lease/parser events/store
     core/                 repository/audit/authorization
@@ -1079,6 +1082,7 @@ internal/agent/
 - 定义 capability、risk、InputSource、error code；
 - 定义 version/sequence/reconnect/idempotency/side-effect boundary；
 - 为现有 Parser ACL/review/command record 建 characterization tests。
+- 隔离验证 Eino `v0.9.12`：只用 fake model/无副作用 Tool，显式顺序执行；完成 stream/cancel/HITL/checkpoint/event mapping/依赖树和故障隔离测试，不连接真实 PTY。
 
 ### Phase 1：只读副驾驶和确定性补全
 
@@ -1186,6 +1190,7 @@ internal/agent/
 | O-010 | 审计存储是否需要 HMAC/event chain 或外部不可变存储 | 审计篡改威胁模型、密钥轮换、验证与归档成本 | 安全评审前 |
 | O-011 | explicit Plan 门槛和各类 run budget 默认值 | 离线任务集、灰度 replan/unknown/用户打断率、延迟与成本 | Phase 2/3 上线前 |
 | O-012 | success criteria 中哪些能确定性计算，哪些只能请求用户确认 | 首批 Tool result fixtures、误成功/误失败评估 | Phase 3 前 |
+| O-013 | 是否正式采用 Eino 作为 Agent 编排 adapter | [Eino 可行性文档](./eino-ai-vue-agent-feasibility.md) 的 PoC 通过标准、checkpoint 升级测试、Provider/事件映射成本、性能和依赖影响 | Phase 1 前 |
 
 ## 18. 已拒绝方案
 
@@ -1210,6 +1215,7 @@ internal/agent/
 | 创建 Plan 时预生成全部 shell 命令 | 后续 profile/PWD/policy 可能变化，命令会 stale，计划预览也会被误认为审批对象 |
 | 用户确认 Plan 即批量授权全部步骤 | 计划只是方向，未来 exact action/风险/环境尚未确定，不能替代逐项策略和审批 |
 | 模型无 observation 即把步骤标为成功 | 语言声明不能替代 ToolResult、post-check 或用户确认 |
+| 用 Eino `planexecute`/`DeepAgent` 或内置 shell/filesystem tool 直接接管生产 Terminal Agent | 默认 Plan、工具和持久化语义不满足 Koko 的 step digest、审批、active PTY、ACL、录像和审计不变量 |
 
 ## 19. 修订记录
 
@@ -1219,13 +1225,16 @@ internal/agent/
 | 0.2.0 | 2026-07-13 | 将 Tool 范围收敛为 SSH/Linux terminal；补充固定后端 ToolDefinition、上下文/执行控制/只读/变更 Tool 清单、resolver 约束和明确拒绝项 |
 | 0.3.0 | 2026-07-13 | 增加会话级 LinuxExecutionProfile、版本化 ResolverRegistry、CommandIR/output parser、stale/re-resolve 规则及域隔离 digest chain；说明 digest 的安全意义与边界 |
 | 0.4.0 | 2026-07-13 | 将 Plan/step 提升为版本化服务端领域对象；增加 PlanUpdate、单步/显式 Plan 门禁、Plan-aware Execute/Observe/Re-plan 状态机、step/action digest 绑定、UI/恢复/测试规范 |
+| 0.5.0 | 2026-07-13 | 增加 Eino + AI SDK Vue 可行性 Review；将 Eino 限定为可替换编排 adapter，加入只读 PoC、采用门禁和拒绝端到端接管方案 |
 
 ## 20. 证据与参考入口
 
 - 研究与完整推导：[terminal-ssh-agent-summary.md](./terminal-ssh-agent-summary.md)
+- Eino + AI SDK Vue 可行性与接入方法：[eino-ai-vue-agent-feasibility.md](./eino-ai-vue-agent-feasibility.md)
 - active PTY 专项审查：[terminal-ssh-agent-summary.md §15](./terminal-ssh-agent-summary.md#15-active-pty-terminal-agent-设计审查与最终选择)
 - Koko active bridge：`pkg/proxy/switch.go`
 - Koko Parser/ACL/review：`pkg/proxy/parser.go`、`parsercmd.go`、`command_check.go`
 - Koko Room/cross-node：`pkg/exchange/room.go`、`redis.go`、`redis_proxy.go`
 - Koko server connection contract：`pkg/srvconn/conn.go`
 - Warp 本地研究基线：`/opt/codes/warp@995e3dd7a2e16d5572db1cb24a9adbfadfe23da8`
+- Eino 本地研究基线：`/opt/codes/eino@922b6a8a233b5233fe47eecee6cd2c005e8c39cd`（PoC 建议固定 `v0.9.12`）
